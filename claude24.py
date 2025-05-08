@@ -44,13 +44,21 @@ class ScreenFieldControlApp:
         self.grid_points_3d = []  # Will store (x, y, z) for each grid intersection
         self.grid_points_2d = []  # Will store (x, y) for each grid intersection
         self.depth_display_mode = 0  # 0: all points, 1: alternate points, 2: minimal
+        
+        # Enhanced touch detection variables
+        self.use_grid_depth = True  # Use grid points for depth comparison
+        self.grid_search_radius = 30  # Search radius for finding nearest grid point (pixels)
+        self.grid_depth_tolerance = 30  # Tolerance for depth comparison with grid (mm)
+        self.grid_depth_threshold = 30  # Specific threshold for click triggering (mm)
+        self.nearest_grid_point = None  # Store nearest grid point for visualization
+        self.debug_mode = True  # Show debug information
 
         # Wall plane estimation variables
         self.wall_plane = None  # Will store (a, b, c, d) for plane equation ax + by + cz + d = 0
         self.calibration_points = []  # 3D points for wall plane calibration
         self.calibration_mode = False
 
-        # Drawing variables - NEW
+        # Drawing variables
         self.drawing_mode = False  # Toggle for drawing mode
         self.drawing_color = (0, 0, 255)  # Red color by default
         self.drawing_thickness = 3  # Line thickness
@@ -99,6 +107,22 @@ class ScreenFieldControlApp:
         self.threshold_slider = tk.Scale(slider_frame, from_=10, to=300, orient=tk.HORIZONTAL, command=self.update_threshold)
         self.threshold_slider.set(self.touch_threshold)
         self.threshold_slider.pack(fill=tk.X)
+        
+        # Add grid depth tolerance slider
+        self.grid_tolerance_label = tk.Label(slider_frame, text="Grid Depth Tolerance (mm):")
+        self.grid_tolerance_label.pack()
+        self.grid_tolerance_slider = tk.Scale(slider_frame, from_=5, to=100, orient=tk.HORIZONTAL, 
+                                              command=self.update_grid_depth_tolerance)
+        self.grid_tolerance_slider.set(self.grid_depth_tolerance)
+        self.grid_tolerance_slider.pack(fill=tk.X)
+
+        # Add specific grid depth threshold slider for click triggering
+        self.grid_threshold_label = tk.Label(slider_frame, text="Click Depth Threshold (mm):")
+        self.grid_threshold_label.pack()
+        self.grid_threshold_slider = tk.Scale(slider_frame, from_=5, to=100, orient=tk.HORIZONTAL, 
+                                             command=self.update_grid_depth_threshold)
+        self.grid_threshold_slider.set(self.grid_depth_threshold)
+        self.grid_threshold_slider.pack(fill=tk.X)
 
         # Add hand detection range sliders
         self.min_distance_label = tk.Label(slider_frame, text="Min Hand Distance (mm):")
@@ -119,22 +143,19 @@ class ScreenFieldControlApp:
         self.grid_slider = tk.Scale(slider_frame, from_=2, to=10, orient=tk.HORIZONTAL, command=self.update_grid_resolution)
         self.grid_slider.set(self.grid_resolution)
         self.grid_slider.pack(fill=tk.X)
-        
-        # Add drawing thickness slider - NEW
-        self.thickness_label = tk.Label(slider_frame, text="Drawing Thickness:")
-        self.thickness_label.pack()
-        self.thickness_slider = tk.Scale(slider_frame, from_=1, to=10, orient=tk.HORIZONTAL, 
-                                        command=self.update_drawing_thickness)
-        self.thickness_slider.set(self.drawing_thickness)
-        self.thickness_slider.pack(fill=tk.X)
+
+        self.depth_value_limiter = 2000  # Default max acceptable depth value (mm)
+        self.value_limiter_label = tk.Label(slider_frame, text="Depth Value Limiter (mm):")
+        self.value_limiter_label.pack()
+        self.value_limiter_slider = tk.Scale(slider_frame, from_=500, to=3000, orient=tk.HORIZONTAL, 
+                                            command=self.update_depth_value_limiter)
+        self.value_limiter_slider.set(self.depth_value_limiter)
+        self.value_limiter_slider.pack(fill=tk.X)
 
         # Add control buttons
         button_frame = tk.Frame(root)
         button_frame.pack(fill=tk.BOTH, padx=10, pady=5)
-        # Add in the button_frame section
-        self.angle_adaptive_button = tk.Button(button_frame, text="Toggle Angle Adaptive", command=self.toggle_adaptive_mode)
-        self.angle_adaptive_button.pack(side=tk.LEFT, padx=5, pady=5)
-
+        
         # Add grid toggle button
         self.grid_toggle_button = tk.Button(button_frame, text="Toggle Grid", command=self.toggle_grid)
         self.grid_toggle_button.pack(side=tk.LEFT, padx=5, pady=5)
@@ -146,113 +167,59 @@ class ScreenFieldControlApp:
         # Add depth display mode button
         self.depth_mode_button = tk.Button(button_frame, text="Cycle Depth Mode", command=self.cycle_depth_mode)
         self.depth_mode_button.pack(side=tk.LEFT, padx=5, pady=5)
-        # Add in the button_frame section
-        self.backup_detection_button = tk.Button(button_frame, text="Toggle Backup Detection", 
-                                                command=self.toggle_backup_detection)
-        self.backup_detection_button.pack(side=tk.LEFT, padx=5, pady=5)
         
-        # Add drawing control frame - NEW
-        drawing_frame = tk.Frame(root)
-        drawing_frame.pack(fill=tk.BOTH, padx=10, pady=5)
-        
-        # Drawing toggle button - NEW
-        self.drawing_toggle_button = tk.Button(drawing_frame, text="Enable Drawing", command=self.toggle_drawing_mode)
-        self.drawing_toggle_button.pack(side=tk.LEFT, padx=5, pady=5)
-        
-        # Clear drawing button - NEW
-        self.clear_drawing_button = tk.Button(drawing_frame, text="Clear Drawing", command=self.clear_drawing)
-        self.clear_drawing_button.pack(side=tk.LEFT, padx=5, pady=5)
-        
-        # Save drawing button - NEW
-        self.save_drawing_button = tk.Button(drawing_frame, text="Save Drawing", command=self.save_drawing)
-        self.save_drawing_button.pack(side=tk.LEFT, padx=5, pady=5)
-        
-        # Color selection dropdown - NEW
-        self.color_var = tk.StringVar(root)
-        self.color_var.set("Red")  # default value
-        color_options_menu = [color[0] for color in self.color_options]
-        self.color_dropdown = tk.OptionMenu(drawing_frame, self.color_var, *color_options_menu, 
-                                           command=self.update_drawing_color)
-        self.color_dropdown.pack(side=tk.LEFT, padx=5, pady=5)
+        # Toggle grid-based depth detection
+        self.grid_depth_button = tk.Button(button_frame, text="Use Grid Depth: ON", command=self.toggle_grid_depth)
+        self.grid_depth_button.pack(side=tk.LEFT, padx=5, pady=5)
 
         self.stop_button = tk.Button(root, text="Stop", command=self.stop_all, state=tk.DISABLED)
         self.stop_button.pack(pady=10)
 
-        # Angle-adaptive parameters
+        # Wall angle related variables
         self.wall_angle = 0  # Angle in degrees (0 = perpendicular to camera)
         self.normal_vector = None  # Normal vector of the wall plane
         self.use_normal_projection = True  # Use projection onto wall normal for clicks
         self.adaptive_thresholds = True  # Adjust thresholds based on wall angle
         self.angle_sensitivity_factor = 1.0  # Sensitivity multiplier for angled surfaces
         
-        # Coordinate display settings - NEW
+        # Coordinate display settings
         self.show_coordinates = True  # Toggle coordinate display
         self.grid_spacing = 50  # Spacing between coordinate grid lines in pixels
 
-    def update_drawing_thickness(self, value):
-        """Update drawing line thickness"""
-        self.drawing_thickness = int(value)
-        print(f"Drawing thickness set to {self.drawing_thickness}")
-        
-    def update_drawing_color(self, color_name):
-        """Update drawing color based on dropdown selection"""
-        for name, color in self.color_options:
-            if name == color_name:
-                self.drawing_color = color
-                print(f"Drawing color set to {color_name}")
-                break
-    
-    def toggle_drawing_mode(self):
-        """Toggle drawing mode on/off"""
-        self.drawing_mode = not self.drawing_mode
-        if self.drawing_mode:
-            self.drawing_toggle_button.config(text="Disable Drawing", bg="light green")
-            print("Drawing mode enabled")
-        else:
-            self.drawing_toggle_button.config(text="Enable Drawing", bg="SystemButtonFace")
-            print("Drawing mode disabled")
-    
-    def clear_drawing(self):
-        """Clear current drawing"""
-        self.drawing_points = []
-        self.last_point = None
-        self.initialize_drawing_canvas()
-        print("Drawing cleared")
-    
-    def save_drawing(self):
-        """Save current drawing as an image file"""
-        if not hasattr(self, 'drawing_canvas') or self.drawing_canvas is None:
-            print("No drawing to save")
-            return
-        
-        # Create directory for saved drawings if it doesn't exist
-        save_dir = "saved_drawings"
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        
-        # Generate filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{save_dir}/drawing_{timestamp}.png"
-        
-        # Convert drawing canvas to PIL Image and save
-        if isinstance(self.drawing_canvas, np.ndarray):
-            img = Image.fromarray(self.drawing_canvas)
-            img.save(filename)
-            print(f"Drawing saved to {filename}")
-        else:
-            print("Drawing canvas not available")
+    def update_grid_depth_threshold(self, value):
+        """Update grid depth threshold for click triggering"""
+        self.grid_depth_threshold = int(value)
+        print(f"Click depth threshold set to {self.grid_depth_threshold} mm")
 
-    def initialize_drawing_canvas(self):
-        """Initialize or reset the drawing canvas"""
-        if self.selection_made:
-            # Create blank canvas matching size of captured screen area
-            width = self.end_x - self.start_x
-            height = self.end_y - self.start_y
-            self.drawing_canvas = np.zeros((height, width, 4), dtype=np.uint8)
-            # Make the background transparent (alpha channel = 0)
-            self.drawing_canvas[:, :, 3] = 0
-            return True
-        return False
+    def update_depth_value_limiter(self, value):
+        """Update the depth value limiter"""
+        self.depth_value_limiter = int(value)
+        print(f"Depth value limiter set to {self.depth_value_limiter} mm")
+
+    def toggle_grid_depth(self):
+        """Toggle grid-based depth detection"""
+        self.use_grid_depth = not self.use_grid_depth
+        if self.use_grid_depth:
+            self.grid_depth_button.config(text="Use Grid Depth: ON", bg="light green")
+            print("Grid-based depth detection enabled")
+        else:
+            self.grid_depth_button.config(text="Use Grid Depth: OFF", bg="SystemButtonFace")
+            print("Grid-based depth detection disabled")
+    
+    def toggle_debug_mode(self):
+        """Toggle debug mode"""
+        self.debug_mode = not self.debug_mode
+        if self.debug_mode:
+            self.debug_button.config(text="Debug: ON", bg="light green")
+            print("Debug mode enabled")
+        else:
+            self.debug_button.config(text="Debug: OFF", bg="SystemButtonFace")
+            print("Debug mode disabled")
+    
+    def update_grid_depth_tolerance(self, value):
+        """Update grid depth tolerance"""
+        self.grid_depth_tolerance = int(value)
+        print(f"Grid depth tolerance set to {self.grid_depth_tolerance} mm")
 
     def update_threshold(self, value):
         self.touch_threshold = int(value)
@@ -290,21 +257,36 @@ class ScreenFieldControlApp:
         self.show_depth = not self.show_depth
         print(f"Depth display {'enabled' if self.show_depth else 'disabled'}")
 
-    def toggle_backup_detection(self):
-        """Toggle backup hand detection on/off"""
-        self.backup_detection_active = not self.backup_detection_active
-        mode = "enabled" if self.backup_detection_active else "disabled"
-        print(f"Backup hand detection {mode}")
-
     def cycle_depth_mode(self):
         self.depth_display_mode = (self.depth_display_mode + 1) % 3
         modes = ["All Points", "Alternate Points", "Minimal"]
         print(f"Depth display mode: {modes[self.depth_display_mode]}")
 
-    def toggle_coordinates(self):
-        """Toggle display of coordinate grid"""
-        self.show_coordinates = not self.show_coordinates
-        print(f"Coordinate display {'enabled' if self.show_coordinates else 'disabled'}")
+    def draw_coordinate_grid(self, image):
+        """Draw coordinate grid on the image"""
+        h, w = image.shape[:2]
+        grid_img = image.copy()
+        
+        # Draw horizontal lines
+        for y in range(0, h, self.grid_spacing):
+            cv2.line(grid_img, (0, y), (w-1, y), (200, 200, 200, 128), 1)
+            cv2.putText(grid_img, f"{y}", (5, y+15), cv2.FONT_HERSHEY_SIMPLEX, 
+                      0.4, (255, 0, 0), 1)
+            
+        # Draw vertical lines
+        for x in range(0, w, self.grid_spacing):
+            cv2.line(grid_img, (x, 0), (x, h-1), (200, 200, 200, 128), 1)
+            cv2.putText(grid_img, f"{x}", (x+2, 15), cv2.FONT_HERSHEY_SIMPLEX, 
+                      0.4, (255, 0, 0), 1)
+            
+        return grid_img
+        
+    def track_screen_mouse(self, event):
+        """Track mouse coordinates on the captured screen"""
+        x, y = event.x, event.y
+        if hasattr(self, 'screen_status_label'):
+            drawing_status = "DRAWING ENABLED" if self.drawing_mode else "Drawing disabled"
+            self.screen_status_label.config(text=f"Position: ({x}, {y}) | {drawing_status}")
 
     def open_selection_window(self):
         # Open a fullscreen transparent window for square selection
@@ -344,7 +326,7 @@ class ScreenFieldControlApp:
         self.calibrate_button.config(state=tk.NORMAL)  # Enable Calibrate button
         self.square_mapping_button.config(state=tk.NORMAL)  # Enable Square Mapping button
         
-        # Initialize drawing canvas after selection - NEW
+        # Initialize drawing canvas after selection
         self.initialize_drawing_canvas()
 
     def start_capture(self):
@@ -364,7 +346,7 @@ class ScreenFieldControlApp:
                 screen = ImageGrab.grab(bbox)
                 screen_array = np.array(screen)
                 
-                # If drawing canvas exists, overlay it on the screen capture - NEW
+                # If drawing canvas exists, overlay it on the screen capture
                 if hasattr(self, 'drawing_canvas') and self.drawing_canvas is not None:
                     # Overlay drawing on screen image
                     alpha_channel = self.drawing_canvas[:, :, 3] / 255.0
@@ -372,7 +354,7 @@ class ScreenFieldControlApp:
                         screen_array[:, :, c] = screen_array[:, :, c] * (1 - alpha_channel) + \
                                               self.drawing_canvas[:, :, c] * alpha_channel
                 
-                # Draw coordinate grid if enabled - NEW
+                # Draw coordinate grid if enabled
                 if hasattr(self, 'show_coordinates') and self.show_coordinates:
                     screen_array = self.draw_coordinate_grid(screen_array)
                 
@@ -386,12 +368,12 @@ class ScreenFieldControlApp:
                     self.screen_label.image = tk_image
                     self.screen_label.pack()
                     
-                    # Add status bar for coordinates and drawing info - NEW
+                    # Add status bar for coordinates and drawing info
                     self.screen_status_label = tk.Label(self.screen_window, 
                                                       text="Ready for drawing. Enable drawing mode to start.")
                     self.screen_status_label.pack(side=tk.BOTTOM, fill=tk.X)
                     
-                    # Add mouse position tracking to captured screen window - NEW
+                    # Add mouse position tracking to captured screen window
                     self.screen_label.bind("<Motion>", self.track_screen_mouse)
                 else:
                     self.screen_label.config(image=tk_image)
@@ -400,32 +382,6 @@ class ScreenFieldControlApp:
                 time.sleep(0.05)  # Refresh at 20fps for smoother drawing
         except Exception as e:
             print(f"Error during screen capture: {e}")
-
-    def draw_coordinate_grid(self, image):
-        """Draw coordinate grid on the image"""
-        h, w = image.shape[:2]
-        grid_img = image.copy()
-        
-        # Draw horizontal lines
-        for y in range(0, h, self.grid_spacing):
-            cv2.line(grid_img, (0, y), (w-1, y), (200, 200, 200, 128), 1)
-            cv2.putText(grid_img, f"{y}", (5, y+15), cv2.FONT_HERSHEY_SIMPLEX, 
-                      0.4, (255, 0, 0), 1)
-            
-        # Draw vertical lines
-        for x in range(0, w, self.grid_spacing):
-            cv2.line(grid_img, (x, 0), (x, h-1), (200, 200, 200, 128), 1)
-            cv2.putText(grid_img, f"{x}", (x+2, 15), cv2.FONT_HERSHEY_SIMPLEX, 
-                      0.4, (255, 0, 0), 1)
-            
-        return grid_img
-        
-    def track_screen_mouse(self, event):
-        """Track mouse coordinates on the captured screen"""
-        x, y = event.x, event.y
-        if hasattr(self, 'screen_status_label'):
-            drawing_status = "DRAWING ENABLED" if self.drawing_mode else "Drawing disabled"
-            self.screen_status_label.config(text=f"Position: ({x}, {y}) | {drawing_status}")
 
     def start_wall_calibration(self):
         """Start the wall plane calibration process"""
@@ -665,9 +621,31 @@ class ScreenFieldControlApp:
         self.square_points_3d = []  # Reset 3D points
         self.grid_points_2d = []    # Reset grid points
         self.grid_points_3d = []    # Reset 3D grid points
+        self.nearest_grid_point = None  # Reset nearest grid point
         self.camera_thread = threading.Thread(target=self.camera_mapping_loop, daemon=True)
         self.camera_thread.start()
         self.stop_button.config(state=tk.NORMAL)  # Enable Stop button
+
+    def find_nearest_grid_point(self, hand_pos_2d):
+        """Find the nearest grid point to the hand position"""
+        if not self.grid_points_2d or not self.grid_points_3d:
+            return None
+            
+        hand_x, hand_y = hand_pos_2d
+        
+        nearest_point = None
+        min_distance = float('inf')
+        
+        # Search through all grid points to find the nearest one
+        for i, (grid_x, grid_y) in enumerate(self.grid_points_2d):
+            # Calculate 2D Euclidean distance
+            distance = np.sqrt((grid_x - hand_x)**2 + (grid_y - hand_y)**2)
+            
+            if distance < min_distance and distance < self.grid_search_radius:
+                min_distance = distance
+                nearest_point = self.grid_points_3d[i]
+        
+        return nearest_point
 
     def calculate_grid_points(self):
         """Calculate the 3D grid points inside the square"""
@@ -759,10 +737,6 @@ class ScreenFieldControlApp:
 
             # Store the latest depth array for use in mouse callback
             self.latest_depth_array = None
-            
-            # Variables for backup detection
-            self.using_backup_detection = False
-            self.backup_detection_active = True  # Flag to enable/disable backup detection
 
             while self.mapping_active:
                 # Capture frames
@@ -790,17 +764,11 @@ class ScreenFieldControlApp:
                     # Show the depth visualization window
                     cv2.imshow("Depth Range", depth_visualization)
 
-                # Hand tracking with MediaPipe
+                # Hand tracking
                 rgb_frame = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
                 results = hands.process(rgb_frame)
-                
-                # Flag to track if primary hand detection worked
-                primary_detection_success = False
 
                 if results.multi_hand_landmarks:
-                    primary_detection_success = True
-                    self.using_backup_detection = False
-                    
                     for hand_landmarks in results.multi_hand_landmarks:
                         # Index finger tip
                         index_finger_tip = hand_landmarks.landmark[8]
@@ -834,50 +802,88 @@ class ScreenFieldControlApp:
                                     # Move cursor
                                     pyautogui.moveTo(screen_x, screen_y)
                                     
-                                    # Calculate distance to wall using enhanced method
-                                    distance_to_wall = self.distance_to_wall(point_3d)
-                                    
-                                    # MODIFIED: Simplified distance-based click detection without velocity or cooldown
-                                    should_click = distance_to_wall <= self.touch_threshold
-                                    
-                                    # Visual feedback for proximity
-                                    proximity_indicator = int(min(255, max(0, 255 - (distance_to_wall / self.touch_threshold) * 255)))
-                                    
-                                    # Draw circle around finger with color based on proximity
-                                    cv2.circle(color_image, (hand_x, hand_y), 15, (0, proximity_indicator, 255-proximity_indicator), 2)
-                                    
-                                    # Show distance text with angle indication
-                                    if hasattr(self, 'wall_angle') and self.wall_angle > 15:
-                                        cv2.putText(color_image, f"Dist: {int(distance_to_wall)}mm @{int(self.wall_angle)}°", 
+                                    # UPDATED CLICK DETECTION: Use average depth around the finger
+                                    should_click = False
+                                    depth_value = depth_array[hand_y, hand_x]
+
+                                    # Define a radius around the index finger to calculate average depth
+                                    radius = 15  # pixels radius around the finger tip
+                                    avg_depth = 0
+                                    pixel_count = 0
+
+                                    # Calculate average depth in the radius around the finger
+                                    for dy in range(-radius, radius+1):
+                                        for dx in range(-radius, radius+1):
+                                            # Check if within radius (circular area)
+                                            if dx*dx + dy*dy <= radius*radius:
+                                                ny, nx = hand_y + dy, hand_x + dx
+                                                # Check if within image bounds
+                                                if 0 <= ny < depth_array.shape[0] and 0 <= nx < depth_array.shape[1]:
+                                                    depth_at_point = depth_array[ny, nx]
+                                                    if depth_at_point > 0:  # Valid depth value
+                                                        avg_depth += depth_at_point
+                                                        pixel_count += 1
+
+                                    # Calculate average if we have valid pixels
+                                    if pixel_count > 0:
+                                        avg_depth = avg_depth / pixel_count
+                                        
+                                        # ENHANCED LOGIC: Apply the complete condition with value limiter
+                                        # (depth_value + slider_value) >= average_depth_value < value_limiter_slider
+                                        should_click = ((depth_value + self.grid_depth_threshold) >= avg_depth) and (avg_depth < self.depth_value_limiter)
+                                        
+                                        # Debug information
+                                        depth_diff = avg_depth - depth_value
+                                        avg_depth_text = f"Finger:{int(depth_value)}mm Avg:{int(avg_depth)}mm Diff:{int(depth_diff)}mm"
+                                        limiter_text = f"Limiter:{self.depth_value_limiter}mm"
+                                        
+                                        print(f"Finger depth: {int(depth_value)}mm, Average depth: {int(avg_depth)}mm, " +
+                                            f"Diff: {int(depth_diff)}mm, Limiter: {self.depth_value_limiter}mm")
+                                        
+                                        # Show click threshold info
+                                        if self.debug_mode:
+                                            click_status = "CLICK" if should_click else "no click"
+                                            threshold_text = f"Threshold: {self.grid_depth_threshold}mm ({click_status})"
+                                            cv2.putText(color_image, threshold_text, 
+                                                    (hand_x + 10, hand_y + 50), cv2.FONT_HERSHEY_SIMPLEX, 
+                                                    0.5, (255, 255, 0), 1, cv2.LINE_AA)
+                                            
+                                            # Add limiter information
+                                            cv2.putText(color_image, limiter_text, 
+                                                    (hand_x + 10, hand_y + 70), cv2.FONT_HERSHEY_SIMPLEX, 
+                                                    0.5, (255, 255, 0), 1, cv2.LINE_AA)
+
+                                        # Visual feedback for surroundings
+                                        cv2.circle(color_image, (hand_x, hand_y), radius, (0, 255, 255), 1)  # Show sampling area
+
+                                        # Draw circle around finger with color based on proximity
+                                        proximity_indicator = int(min(255, max(0, 255 - (depth_diff / self.grid_depth_threshold) * 255)))
+                                        cv2.circle(color_image, (hand_x, hand_y), 15, (0, proximity_indicator, 255-proximity_indicator), 2)
+                                        
+                                        # Show distance text
+                                        cv2.putText(color_image, f"Depth diff: {int(depth_diff)}mm", 
                                                 (hand_x + 10, hand_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 
                                                 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                                    else:
-                                        cv2.putText(color_image, f"Dist: {int(distance_to_wall)}mm", 
-                                                (hand_x + 10, hand_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 
-                                                0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                                    
-                                    # Show coordinates of mapped screen point
-                                    cv2.putText(color_image, f"Screen: ({int(screen_x-self.start_x)},{int(screen_y-self.start_y)})", 
-                                            (hand_x + 10, hand_y + 10), cv2.FONT_HERSHEY_SIMPLEX, 
-                                            0.5, (255, 255, 0), 1, cv2.LINE_AA)
-                                    
-                                    # Handle touch for drawing - NEW
+                                        
+                                        # Show average depth information if available
+                                        if self.debug_mode:
+                                            cv2.putText(color_image, avg_depth_text, 
+                                                    (hand_x + 10, hand_y + 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                                                    0.5, (255, 255, 0), 1, cv2.LINE_AA)
+                                    # Handle touch
                                     if should_click:
-                                        angle_text = ""
-                                        if hasattr(self, 'wall_angle') and self.wall_angle > 15:
-                                            angle_text = f" (angled {int(self.wall_angle)}°)"
                                         touch_pos = (int(screen_x-self.start_x), int(screen_y-self.start_y))
                                         
                                         # If in drawing mode, add point to drawing
                                         if self.drawing_mode:
                                             self.add_drawing_point(touch_pos)
-                                            print(f"Drawing at {touch_pos}{angle_text}")
+                                            print(f"Drawing at {touch_pos}")
                                             
                                             # Visual feedback in camera feed for drawing
                                             cv2.circle(color_image, (hand_x, hand_y), 20, self.drawing_color, -1)
                                         else:
                                             # Standard click behavior when not in drawing mode
-                                            print(f"Touch detected at {touch_pos}{angle_text}")
+                                            print(f"Click at {touch_pos} - depth diff: {int(depth_diff)}mm")
                                             pyautogui.click(screen_x, screen_y)
                                             
                                             # Strong visual feedback for touch
@@ -895,106 +901,35 @@ class ScreenFieldControlApp:
                                 else:
                                     # Hand is inside detection range but outside mapped screen area
                                     cv2.putText(color_image, "Hand outside mapped area", 
-                                            (hand_x + 10, hand_y - 10),
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
-                
-                # BACKUP DETECTION: If MediaPipe failed to detect hand landmarks and backup is enabled
-                if not primary_detection_success and self.backup_detection_active:
-                    self.using_backup_detection = True
-                    # Run backup detection based on depth information
-                    hand_detected, hand_x, hand_y, depth_value = self.detect_hand_from_depth(depth_array)
-                    
-                    if hand_detected:
-                        # Apply the same logic as with MediaPipe detection
-                        if 0 <= hand_x < depth_array.shape[1] and 0 <= hand_y < depth_array.shape[0]:
-                            if depth_value > 0 and self.min_hand_distance <= depth_value <= self.max_hand_distance:
-                                # Create 3D point (x, y, z)
-                                point_3d = (hand_x, hand_y, depth_value)
-                                
-                                # Calculate distance to wall
-                                distance_to_wall = self.distance_to_wall(point_3d) if self.wall_plane else depth_value
-                                
-                                # Check if point is inside the projected 3D square
-                                is_inside, mapped_pos = self.check_point_in_3d_square((hand_x, hand_y, depth_value))
-                                
-                                if is_inside:
-                                    # Map position to screen coordinates
-                                    screen_x, screen_y = mapped_pos
-                                    
-                                    # Move cursor
-                                    pyautogui.moveTo(screen_x, screen_y)
-                                    
-                                    # Click detection based on distance
-                                    should_click = distance_to_wall <= self.touch_threshold
-                                    
-                                    # Visual feedback for backup detection
-                                    cv2.circle(color_image, (hand_x, hand_y), 25, (255, 0, 255), 2)  # Magenta circle for backup
-                                    cv2.putText(color_image, "BACKUP", (hand_x + 10, hand_y - 30), 
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
-                                    
-                                    # Show distance
-                                    cv2.putText(color_image, f"Dist: {int(distance_to_wall)}mm", 
-                                            (hand_x + 10, hand_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 
-                                            0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                                    
-                                    # Show coordinates
-                                    cv2.putText(color_image, f"Screen: ({int(screen_x-self.start_x)},{int(screen_y-self.start_y)})", 
-                                            (hand_x + 10, hand_y + 10), cv2.FONT_HERSHEY_SIMPLEX, 
-                                            0.5, (255, 255, 0), 1, cv2.LINE_AA)
-                                    
-                                    # Handle touch/click with backup detection
-                                    if should_click:
-                                        touch_pos = (int(screen_x-self.start_x), int(screen_y-self.start_y))
-                                        
-                                        # Same drawing/clicking logic as primary detection
-                                        if self.drawing_mode:
-                                            self.add_drawing_point(touch_pos)
-                                            print(f"BACKUP: Drawing at {touch_pos}")
-                                            cv2.circle(color_image, (hand_x, hand_y), 20, self.drawing_color, -1)
-                                        else:
-                                            print(f"BACKUP: Touch detected at {touch_pos}")
-                                            pyautogui.click(screen_x, screen_y)
-                                            cv2.circle(color_image, (hand_x, hand_y), 20, (0, 0, 255), -1)
-                                        
-                                        self.is_touching = True
-                                    else:
-                                        if self.is_touching:
-                                            self.is_touching = False
-                                            if self.drawing_mode:
-                                                self.last_point = None
+                                              (hand_x + 10, hand_y - 10),
+                                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
 
                 # Show settings information
-                cv2.putText(color_image, f"Touch threshold: {self.touch_threshold}mm", 
-                        (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                cv2.putText(color_image, f"Click depth threshold: {self.grid_depth_threshold}mm", 
+                           (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
                 
                 cv2.putText(color_image, f"Hand range: {self.min_hand_distance}-{self.max_hand_distance}mm", 
-                        (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-                
-                # Display backup detection status
-                if self.using_backup_detection:
-                    cv2.putText(color_image, "BACKUP DETECTION ACTIVE", 
-                            (color_image.shape[1] - 300, 60), cv2.FONT_HERSHEY_SIMPLEX, 
-                            0.7, (255, 0, 255), 2, cv2.LINE_AA)
+                           (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
                 
                 # Display drawing mode status
                 if self.drawing_mode:
                     cv2.putText(color_image, "DRAWING MODE ON", 
-                            (color_image.shape[1] - 200, 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                            0.7, self.drawing_color, 2, cv2.LINE_AA)
+                               (color_image.shape[1] - 200, 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                               0.7, self.drawing_color, 2, cv2.LINE_AA)
                 
                 if len(self.square_points_3d) < 4:
                     cv2.putText(color_image, f"Click to define 3D square: {len(self.square_points_3d)}/4 points", 
-                            (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+                               (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
                 else:
                     cv2.putText(color_image, "3D square mapped! Move finger inside square.", 
-                            (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+                               (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
                     cv2.putText(color_image, f"Grid resolution: {self.grid_resolution}x{self.grid_resolution}", 
-                            (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+                               (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
                     
                     # Display depth mode
                     modes = ["All Points", "Alternate Points", "Minimal"]
                     cv2.putText(color_image, f"Depth mode: {modes[self.depth_display_mode]}", 
-                            (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+                               (20, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
 
                 cv2.imshow("Camera Feed", color_image)
                 
@@ -1021,28 +956,22 @@ class ScreenFieldControlApp:
                     self.grid_resolution = max(2, self.grid_resolution - 1)
                     self.grid_slider.set(self.grid_resolution)
                     self.calculate_grid_points()
-                elif key == ord('['):  # Decrease minimum hand distance
-                    self.min_hand_distance = max(100, self.min_hand_distance - 50)
-                    self.min_distance_slider.set(self.min_hand_distance)
-                elif key == ord(']'):  # Increase minimum hand distance
-                    self.min_hand_distance = min(self.max_hand_distance - 100, self.min_hand_distance + 50)
-                    self.min_distance_slider.set(self.min_hand_distance)
-                elif key == ord(';'):  # Decrease maximum hand distance
-                    self.max_hand_distance = max(self.min_hand_distance + 100, self.max_hand_distance - 50)
-                    self.max_distance_slider.set(self.max_hand_distance)
-                elif key == ord('\''):  # Increase maximum hand distance
-                    self.max_hand_distance = min(3000, self.max_hand_distance + 50)
-                    self.max_distance_slider.set(self.max_hand_distance)
+                elif key == ord('['):  # Decrease grid depth threshold
+                    self.grid_depth_threshold = max(5, self.grid_depth_threshold - 5)
+                    self.grid_threshold_slider.set(self.grid_depth_threshold)
+                elif key == ord(']'):  # Increase grid depth threshold
+                    self.grid_depth_threshold = min(100, self.grid_depth_threshold + 5)
+                    self.grid_threshold_slider.set(self.grid_depth_threshold)
                 elif key == ord('p'):  # Toggle drawing mode
                     self.toggle_drawing_mode()
                 elif key == ord('c'):  # Clear drawing
                     self.clear_drawing()
                 elif key == ord('s'):  # Save drawing
                     self.save_drawing()
-                elif key == ord('b'):  # Toggle backup detection
-                    self.backup_detection_active = not self.backup_detection_active
-                    status = "enabled" if self.backup_detection_active else "disabled"
-                    print(f"Backup detection {status}")
+                elif key == ord('t'):  # Toggle grid-based depth mode
+                    self.toggle_grid_depth()
+                elif key == ord('b'):  # Toggle debug mode
+                    self.toggle_debug_mode()
 
             # Cleanup
             depth_stream.stop()
@@ -1052,38 +981,6 @@ class ScreenFieldControlApp:
             cv2.destroyAllWindows()
         except Exception as e:
             print(f"Error during square mapping: {e}")
-
-    def add_drawing_point(self, point):
-        """Add a new point to the drawing canvas"""
-        if not hasattr(self, 'drawing_canvas') or self.drawing_canvas is None:
-            self.initialize_drawing_canvas()
-            
-        if self.drawing_canvas is None:
-            return
-            
-        x, y = point
-        
-        # Make sure the point is within the canvas bounds
-        h, w = self.drawing_canvas.shape[:2]
-        if not (0 <= x < w and 0 <= y < h):
-            return
-            
-        # Draw point on canvas
-        color = self.drawing_color + (255,)  # Add alpha channel
-        
-        # If this is the first point or start of a new line
-        if self.last_point is None:
-            cv2.circle(self.drawing_canvas, (x, y), self.drawing_thickness, color, -1)
-        else:
-            # Connect to previous point with a line
-            cv2.line(self.drawing_canvas, self.last_point, (x, y), color, self.drawing_thickness*2)
-            cv2.circle(self.drawing_canvas, (x, y), self.drawing_thickness, color, -1)
-            
-        # Update last point
-        self.last_point = (x, y)
-        
-        # Store point for possible future save/restore
-        self.drawing_points.append((x, y, self.drawing_color, self.drawing_thickness))
 
     def create_depth_range_visualization(self, depth_array):
         """Create a visualization of the depth range for hand detection"""
@@ -1165,100 +1062,13 @@ class ScreenFieldControlApp:
                     else:
                         print(f"Point ({x}, {y}) is outside of depth array bounds.")
 
-    def detect_hand_from_depth(self, depth_array):
-        """
-        Backup detection method that uses depth data to find the closest object 
-        within the hand detection range, likely to be a hand.
-        
-        Returns:
-            tuple: (detected, x, y, depth) - whether a hand was detected and its position and depth
-        """
-        if depth_array is None:
-            return False, 0, 0, 0
-        
-        # Create a binary mask for depths in the hand detection range
-        depth_mask = np.logical_and(
-            depth_array >= self.min_hand_distance,
-            depth_array <= self.max_hand_distance
-        )
-        
-        # Remove invalid depth values (zeros)
-        depth_mask = np.logical_and(depth_mask, depth_array > 0)
-        
-        # Check if we have any valid points
-        if not np.any(depth_mask):
-            return False, 0, 0, 0
-        
-        # Find the closest point (minimum depth value)
-        min_depth = np.min(depth_array[depth_mask])
-        
-        # Create a mask for points close to the minimum depth (within 50mm)
-        close_mask = np.logical_and(depth_mask, depth_array <= min_depth + 50)
-        
-        # If we don't have enough close points, it's probably noise
-        if np.sum(close_mask) < 100:  # At least 100 pixels needed
-            return False, 0, 0, 0
-        
-        # Find potential "hand" regions using connected components
-        num_labels, labels = cv2.connectedComponents(close_mask.astype(np.uint8))
-        
-        # Find the largest component (likely to be the hand)
-        largest_component = 0
-        largest_size = 0
-        
-        for label in range(1, num_labels):  # Skip background (0)
-            size = np.sum(labels == label)
-            if size > largest_size:
-                largest_size = size
-                largest_component = label
-        
-        # If the largest component is too small, it's probably noise
-        if largest_size < 200:  # Require at least 200 pixels for a hand
-            return False, 0, 0, 0
-        
-        # Get the mask for the largest component
-        hand_mask = (labels == largest_component)
-        
-        # Find the top-most point (lowest y-value) in the hand region
-        # This is likely to be the fingertip for pointing
-        y_coords, x_coords = np.where(hand_mask)
-        if len(y_coords) == 0:
-            return False, 0, 0, 0
-        
-        # Calculate the centroid of the hand region
-        centroid_y = int(np.mean(y_coords))
-        centroid_x = int(np.mean(x_coords))
-        
-        # Find points in the top 20% of the region (closest to top of the frame)
-        top_threshold = min(y_coords) + (max(y_coords) - min(y_coords)) * 0.2
-        top_indices = y_coords < top_threshold
-        top_y_coords = y_coords[top_indices]
-        top_x_coords = x_coords[top_indices]
-        
-        if len(top_y_coords) == 0:
-            # If no top points, use centroid
-            fingertip_y = centroid_y
-            fingertip_x = centroid_x
-        else:
-            # Use the average position of the top points as the fingertip
-            fingertip_y = int(np.mean(top_y_coords))
-            fingertip_x = int(np.mean(top_x_coords))
-        
-        # Get the depth at the fingertip position
-        if 0 <= fingertip_y < depth_array.shape[0] and 0 <= fingertip_x < depth_array.shape[1]:
-            depth_value = depth_array[fingertip_y, fingertip_x]
-            if depth_value <= 0:  # If invalid depth, use the minimum depth
-                depth_value = min_depth
-        else:
-            depth_value = min_depth
-        
-        return True, fingertip_x, fingertip_y, depth_value
-
     def compute_perspective_transform(self):
         """Compute homography matrix for perspective transformation"""
         if len(self.square_points_2d) != 4:
             return
             
+        # Source points are the 2D points in camera image
+        src_pts = np.array(self.square_points_2d, dtype=np.float32)
         # Source points are the 2D points in camera image
         src_pts = np.array(self.square_points_2d, dtype=np.float32)
         
@@ -1318,12 +1128,6 @@ class ScreenFieldControlApp:
             
         return (b, g, r)  # OpenCV uses BGR
 
-    def toggle_adaptive_mode(self):
-        """Toggle angle-adaptive detection mode"""
-        self.adaptive_thresholds = not self.adaptive_thresholds
-        mode = "enabled" if self.adaptive_thresholds else "disabled"
-        print(f"Angle-adaptive detection {mode}")
-
     def draw_3d_square_on_image(self, image):
         """Draw the 3D square and grid on the image with wall angle visualization"""
         # Draw individual corner points
@@ -1377,6 +1181,13 @@ class ScreenFieldControlApp:
                         line_color = self.get_depth_color(avg_depth, min_depth, max_depth)
                         cv2.line(image, pt1, pt2, line_color, 1)
                 
+                # Draw nearest grid point for hand interaction if available
+                if self.use_grid_depth and self.nearest_grid_point is not None and self.debug_mode:
+                    x, y, z = self.nearest_grid_point
+                    cv2.circle(image, (int(x), int(y)), 8, (255, 0, 255), 2)  # Magenta circle
+                    cv2.putText(image, f"Target: {int(z)}mm", (int(x)+5, int(y)+20), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+                
                 # Draw depth values at grid intersections
                 if self.show_depth:
                     for i, (x, y, z) in enumerate(self.grid_points_3d):
@@ -1418,67 +1229,12 @@ class ScreenFieldControlApp:
                             cv2.putText(image, text, 
                                     (int(x)-text_size[0]//2, int(y)+text_size[1]//2), 
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, depth_color, 1)
-                            
-                            # Add mapped screen coordinates if coordinate display is enabled
-                            if self.homography_matrix is not None and self.show_coordinates:
-                                # Map this point to screen coordinates
-                                point = np.array([[[x, y]]], dtype=np.float32)
-                                mapped = cv2.perspectiveTransform(point, self.homography_matrix)
-                                screen_x = int(mapped[0][0][0] - self.start_x)
-                                screen_y = int(mapped[0][0][1] - self.start_y)
-                                
-                                # Show screen coordinates below depth
-                                cv2.putText(image, f"({screen_x},{screen_y})", 
-                                        (int(x)-text_size[0], int(y)+text_size[1]+12), 
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1)
                 
                 # Show wall angle information
                 if self.wall_plane is not None and hasattr(self, 'wall_angle'):
                     angle_text = f"Wall angle: {int(self.wall_angle)}°"
-                    cv2.putText(image, angle_text, (20, 180), 
+                    cv2.putText(image, angle_text, (20, 240), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
-                    
-                    # Add visual representation of the wall orientation
-                    # Draw a small coordinate system showing wall orientation
-                    if hasattr(self, 'normal_vector') and self.normal_vector is not None:
-                        center_x, center_y = 80, 220
-                        normal_scale = 30
-                        
-                        # Draw Z axis (depth)
-                        cv2.line(image, (center_x, center_y), 
-                                (center_x, center_y - normal_scale), 
-                                (255, 0, 0), 2)  # Z axis in blue
-                        
-                        # Draw normal vector
-                        end_x = center_x + int(self.normal_vector[0] * normal_scale)
-                        end_y = center_y - int(self.normal_vector[2] * normal_scale)  # Note: Y in image is inverted
-                        cv2.line(image, (center_x, center_y), (end_x, end_y), (0, 255, 255), 2)
-                        
-                        # Label the diagram
-                        cv2.putText(image, "Z", (center_x+5, center_y-normal_scale-5), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-                        cv2.putText(image, "Normal", (end_x+5, end_y-5), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-                        
-                    # Show additional angle-adaptive information
-                    if hasattr(self, 'adaptive_thresholds') and self.adaptive_thresholds:
-                        adaptive_text = f"Adaptive mode: ON (factor: {int(self.angle_sensitivity_factor)})"
-                        cv2.putText(image, adaptive_text, (20, 250), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-                    else:
-                        cv2.putText(image, "Adaptive mode: OFF", (20, 250), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-                
-                # Draw normal vector if we have wall plane
-                if self.wall_plane is not None:
-                    centroid = np.mean(self.square_points_3d, axis=0)
-                    normal = np.array(self.wall_plane[:3])
-                    normal = normal / np.linalg.norm(normal) * 50  # Scale for visualization
-                    
-                    # Draw normal vector
-                    end_point = (int(centroid[0] + normal[0]), int(centroid[1] + normal[1]))
-                    cv2.arrowedLine(image, (int(centroid[0]), int(centroid[1])), end_point, 
-                                (255, 0, 0), 2, tipLength=0.2)
                 
                 # Add depth color legend
                 if self.show_depth and len(self.grid_points_3d) > 0:
@@ -1534,7 +1290,6 @@ class ScreenFieldControlApp:
                 pass
         self.stop_button.config(state=tk.DISABLED)
         print("Stopped all operations.")
-
 
 # Main function
 if __name__ == "__main__":

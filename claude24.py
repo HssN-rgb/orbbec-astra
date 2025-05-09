@@ -94,11 +94,11 @@ class ScreenFieldControlApp:
 
         self.start_capture_button = tk.Button(control_frame, text="Start Capture", command=self.start_capture, state=tk.DISABLED)
         self.start_capture_button.pack(pady=5)
-
+        """
         self.calibrate_button = tk.Button(control_frame, text="Calibrate Wall Plane", command=self.start_wall_calibration, state=tk.DISABLED)
-        self.calibrate_button.pack(pady=5)
+        self.calibrate_button.pack(pady=5)"""
 
-        self.square_mapping_button = tk.Button(control_frame, text="3D Square Mapping", command=self.start_square_mapping, state=tk.DISABLED)
+        self.square_mapping_button = tk.Button(control_frame, text="3D Square Mapping", command=self.start_square_mapping)
         self.square_mapping_button.pack(pady=5)
 
         # Add threshold slider
@@ -117,7 +117,7 @@ class ScreenFieldControlApp:
         self.grid_tolerance_slider.pack(fill=tk.X)
 
         # Add specific grid depth threshold slider for click triggering
-        self.grid_threshold_label = tk.Label(slider_frame, text="Click Depth Threshold (mm):")
+        self.grid_threshold_label = tk.Label(slider_frame, text="Will add value to finger depth to trigger a click when: fingerdepth >= ave depth of radius (mm):")
         self.grid_threshold_label.pack()
         self.grid_threshold_slider = tk.Scale(slider_frame, from_=5, to=100, orient=tk.HORIZONTAL, 
                                              command=self.update_grid_depth_threshold)
@@ -145,7 +145,7 @@ class ScreenFieldControlApp:
         self.grid_slider.pack(fill=tk.X)
 
         self.depth_value_limiter = 2000  # Default max acceptable depth value (mm)
-        self.value_limiter_label = tk.Label(slider_frame, text="Depth Value Limiter (mm):")
+        self.value_limiter_label = tk.Label(slider_frame, text="adjust this shit para di mag click kahit malapit yung kamay sa cam (mm):")
         self.value_limiter_label.pack()
         self.value_limiter_slider = tk.Scale(slider_frame, from_=500, to=3000, orient=tk.HORIZONTAL, 
                                             command=self.update_depth_value_limiter)
@@ -382,9 +382,9 @@ class ScreenFieldControlApp:
                 time.sleep(0.05)  # Refresh at 20fps for smoother drawing
         except Exception as e:
             print(f"Error during screen capture: {e}")
-
+    """
     def start_wall_calibration(self):
-        """Start the wall plane calibration process"""
+        #Start the wall plane calibration process
         self.calibration_mode = True
         self.calibration_points = []
         self.wall_plane = None
@@ -393,7 +393,7 @@ class ScreenFieldControlApp:
         
         # Start camera to collect calibration points
         self.camera_thread = threading.Thread(target=self.calibration_loop, daemon=True)
-        self.camera_thread.start()
+        self.camera_thread.start()"""
 
     def calibration_loop(self):
         """Camera loop for wall plane calibration"""
@@ -625,6 +625,9 @@ class ScreenFieldControlApp:
         self.camera_thread = threading.Thread(target=self.camera_mapping_loop, daemon=True)
         self.camera_thread.start()
         self.stop_button.config(state=tk.NORMAL)  # Enable Stop button
+        
+        # Initialize the separate grid window
+        self.initialize_grid_window()
 
     def find_nearest_grid_point(self, hand_pos_2d):
         """Find the nearest grid point to the hand position"""
@@ -696,8 +699,195 @@ class ScreenFieldControlApp:
                 # Store the grid point
                 self.grid_points_2d.append((x, y))
                 self.grid_points_3d.append((x, y, z))
-                
+                    
         print(f"Generated {len(self.grid_points_2d)} grid points")
+        
+        # Update the grid visualization window
+        self.update_grid_window()
+        
+    def initialize_grid_window(self):
+        """Create a separate window for grid visualization"""
+        if hasattr(self, 'grid_window') and self.grid_window is not None:
+            return
+            
+        self.grid_window = tk.Toplevel(self.root)
+        self.grid_window.title("Grid Depth Visualization")
+        self.grid_label = tk.Label(self.grid_window)
+        self.grid_label.pack(padx=10, pady=10)
+        
+        # Add controls specific to the grid view
+        control_frame = tk.Frame(self.grid_window)
+        control_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Grid resolution control
+        res_frame = tk.Frame(control_frame)
+        res_frame.pack(side=tk.LEFT, padx=5)
+        tk.Label(res_frame, text="Grid Resolution:").pack(side=tk.LEFT)
+        grid_res_slider = tk.Scale(res_frame, from_=2, to=10, orient=tk.HORIZONTAL, 
+                                command=self.update_grid_resolution, length=100)
+        grid_res_slider.set(self.grid_resolution)
+        grid_res_slider.pack(side=tk.LEFT)
+        
+        # Depth display mode toggle
+        tk.Button(control_frame, text="Toggle Depth", 
+                command=self.toggle_depth).pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(control_frame, text="Cycle Depth Mode", 
+                command=self.cycle_depth_mode).pack(side=tk.LEFT, padx=5)
+        
+        # Status label
+        self.grid_status = tk.Label(self.grid_window, text="Grid visualization ready")
+        self.grid_status.pack(side=tk.BOTTOM, fill=tk.X)
+
+    def update_grid_window(self, depth_array=None):
+        """Update the grid visualization window with current data"""
+        if not hasattr(self, 'grid_window') or self.grid_window is None:
+            self.initialize_grid_window()
+            
+        if len(self.square_points_3d) != 4:
+            # Not enough points to draw grid yet
+            grid_image = np.zeros((400, 400, 3), dtype=np.uint8)
+            cv2.putText(grid_image, "Define 4 corner points first", 
+                    (50, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            tk_image = ImageTk.PhotoImage(Image.fromarray(grid_image))
+            self.grid_label.config(image=tk_image)
+            self.grid_label.image = tk_image
+            return
+            
+        # Create a clean image for grid visualization
+        grid_size = 500  # Fixed size for grid window
+        grid_image = np.zeros((grid_size, grid_size, 3), dtype=np.uint8)
+        
+        if len(self.grid_points_2d) == 0:
+            return
+            
+        # Get depth range for color mapping
+        depths = [point[2] for point in self.grid_points_3d]
+        min_depth = min(depths)
+        max_depth = max(depths)
+        
+        # Scale grid points to fit the visualization window
+        grid_points_array = np.array(self.grid_points_2d, dtype=np.float32)
+        x_min, y_min = np.min(grid_points_array, axis=0)
+        x_max, y_max = np.max(grid_points_array, axis=0)
+        
+        # Calculate scaling factors
+        scale_x = (grid_size - 40) / (x_max - x_min)
+        scale_y = (grid_size - 40) / (y_max - y_min)
+        scale = min(scale_x, scale_y)  # Use the same scale for both dimensions to maintain aspect ratio
+        
+        # Scale and offset points to fit in the window with a margin
+        scaled_grid_points = []
+        for i, (x, y) in enumerate(self.grid_points_2d):
+            scaled_x = int(20 + (x - x_min) * scale)
+            scaled_y = int(20 + (y - y_min) * scale)
+            scaled_grid_points.append((scaled_x, scaled_y))
+        
+        # Draw horizontal grid lines
+        for i in range(self.grid_resolution + 1):
+            row_points = scaled_grid_points[i*(self.grid_resolution+1):(i+1)*(self.grid_resolution+1)]
+            row_depths = [self.grid_points_3d[i*(self.grid_resolution+1)+j][2] for j in range(self.grid_resolution+1)]
+            
+            for j in range(len(row_points)-1):
+                pt1 = row_points[j]
+                pt2 = row_points[j+1]
+                
+                # Color lines based on average depth
+                avg_depth = (row_depths[j] + row_depths[j+1]) / 2
+                line_color = self.get_depth_color(avg_depth, min_depth, max_depth)
+                cv2.line(grid_image, pt1, pt2, line_color, 2)
+        
+        # Draw vertical grid lines
+        for j in range(self.grid_resolution + 1):
+            col_points = [scaled_grid_points[i*(self.grid_resolution+1)+j] for i in range(self.grid_resolution+1)]
+            col_depths = [self.grid_points_3d[i*(self.grid_resolution+1)+j][2] for i in range(self.grid_resolution+1)]
+            
+            for i in range(len(col_points)-1):
+                pt1 = col_points[i]
+                pt2 = col_points[i+1]
+                
+                # Color lines based on average depth
+                avg_depth = (col_depths[i] + col_depths[i+1]) / 2
+                line_color = self.get_depth_color(avg_depth, min_depth, max_depth)
+                cv2.line(grid_image, pt1, pt2, line_color, 2)
+        
+        # Draw depth values at grid intersections
+        if self.show_depth:
+            for i, ((x, y), (_, _, z)) in enumerate(zip(scaled_grid_points, self.grid_points_3d)):
+                # Apply different display modes to control density of depth labels
+                show_this_point = False
+                
+                if self.depth_display_mode == 0:
+                    # All points
+                    show_this_point = True
+                elif self.depth_display_mode == 1:
+                    # Alternate points (checkerboard pattern)
+                    row = i // (self.grid_resolution + 1)
+                    col = i % (self.grid_resolution + 1)
+                    show_this_point = (row + col) % 2 == 0
+                elif self.depth_display_mode == 2:
+                    # Minimal points (just corners and center)
+                    row = i // (self.grid_resolution + 1)
+                    col = i % (self.grid_resolution + 1)
+                    is_corner = (row == 0 and col == 0) or \
+                                (row == 0 and col == self.grid_resolution) or \
+                                (row == self.grid_resolution and col == 0) or \
+                                (row == self.grid_resolution and col == self.grid_resolution)
+                    is_center = row == self.grid_resolution // 2 and col == self.grid_resolution // 2
+                    show_this_point = is_corner or is_center
+                
+                if show_this_point:
+                    # Get color based on depth
+                    depth_color = self.get_depth_color(z, min_depth, max_depth)
+                    
+                    # Draw point
+                    cv2.circle(grid_image, (x, y), 5, depth_color, -1)
+                    
+                    # Create a darker background rectangle for text readability
+                    text = f"{int(z)}"
+                    text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                    cv2.rectangle(grid_image, 
+                                (x-text_size[0]//2-2, y-text_size[1]//2-2), 
+                                (x+text_size[0]//2+2, y+text_size[1]//2+2),
+                                (0, 0, 0), -1)
+                    
+                    # Draw depth value centered on the point
+                    cv2.putText(grid_image, text, (x-text_size[0]//2, y+text_size[1]//2), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        # Add depth color legend
+        if self.show_depth:
+            legend_width = 300
+            legend_height = 20
+            legend_x = (grid_size - legend_width) // 2
+            legend_y = grid_size - 50
+            
+            # Draw gradient bar
+            for i in range(legend_width):
+                normalized_depth = i / legend_width
+                depth_value = min_depth + normalized_depth * (max_depth - min_depth)
+                color = self.get_depth_color(depth_value, min_depth, max_depth)
+                cv2.line(grid_image, (legend_x + i, legend_y), 
+                    (legend_x + i, legend_y + legend_height), color, 1)
+            
+            # Draw min and max labels
+            cv2.putText(grid_image, f"{int(min_depth)}mm", (legend_x - 5, legend_y + legend_height + 15), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(grid_image, f"{int(max_depth)}mm", (legend_x + legend_width - 40, legend_y + legend_height + 15), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(grid_image, "Depth Values (mm)", (legend_x + legend_width//2 - 70, legend_y - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        
+        # Add stats to status bar
+        stats_text = f"Resolution: {self.grid_resolution}x{self.grid_resolution} | "
+        stats_text += f"Depth range: {int(min_depth)}-{int(max_depth)}mm | "
+        stats_text += f"Mode: {['All Points', 'Alternate Points', 'Minimal'][self.depth_display_mode]}"
+        self.grid_status.config(text=stats_text)
+        
+        # Display the grid image
+        tk_image = ImageTk.PhotoImage(Image.fromarray(grid_image))
+        self.grid_label.config(image=tk_image)
+        self.grid_label.image = tk_image
 
     def camera_mapping_loop(self):
         try:
@@ -757,13 +947,13 @@ class ScreenFieldControlApp:
 
                 # Draw the 3D square and grid on the camera feed
                 color_image = self.draw_3d_square_on_image(color_image)
-                
+                """
                 # Create a depth visualization for hand distance range
                 depth_visualization = self.create_depth_range_visualization(depth_array)
                 if depth_visualization is not None:
                     # Show the depth visualization window
                     cv2.imshow("Depth Range", depth_visualization)
-
+                """
                 # Hand tracking
                 rgb_frame = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
                 results = hands.process(rgb_frame)
@@ -830,8 +1020,8 @@ class ScreenFieldControlApp:
                                         
                                         # ENHANCED LOGIC: Apply the complete condition with value limiter
                                         # (depth_value + slider_value) >= average_depth_value < value_limiter_slider
+                                        #should_click = ((depth_value + self.grid_depth_threshold) >= avg_depth) and (avg_depth < self.depth_value_limiter)
                                         should_click = ((depth_value + self.grid_depth_threshold) >= avg_depth) and (avg_depth < self.depth_value_limiter)
-                                        
                                         # Debug information
                                         depth_diff = avg_depth - depth_value
                                         avg_depth_text = f"Finger:{int(depth_value)}mm Avg:{int(avg_depth)}mm Diff:{int(depth_diff)}mm"
@@ -952,6 +1142,9 @@ class ScreenFieldControlApp:
                     self.grid_resolution = min(10, self.grid_resolution + 1)
                     self.grid_slider.set(self.grid_resolution)
                     self.calculate_grid_points()
+
+                if len(self.grid_points_3d) == (self.grid_resolution + 1) * (self.grid_resolution + 1):
+                    self.update_grid_window(depth_array)
                 elif key == ord('-'):  # Decrease grid resolution
                     self.grid_resolution = max(2, self.grid_resolution - 1)
                     self.grid_slider.set(self.grid_resolution)
@@ -981,9 +1174,9 @@ class ScreenFieldControlApp:
             cv2.destroyAllWindows()
         except Exception as e:
             print(f"Error during square mapping: {e}")
-
+    """
     def create_depth_range_visualization(self, depth_array):
-        """Create a visualization of the depth range for hand detection"""
+        #Create a visualization of the depth range for hand detection
         if depth_array is None:
             return None
             
@@ -1038,7 +1231,7 @@ class ScreenFieldControlApp:
         vis_image = np.vstack((depth_vis, bar_image))
         
         return vis_image
-
+    """
     def draw_3d_square(self, event, x, y, flags, param):
         """Handle clicks for defining 3D square corners"""
         if event == cv2.EVENT_LBUTTONDOWN and self.mapping_active:
@@ -1282,12 +1475,22 @@ class ScreenFieldControlApp:
         self.capturing = False
         self.mapping_active = False
         self.calibration_mode = False
+        
+        # Close windows
         if hasattr(self, 'screen_window'):
             try:
                 self.screen_window.destroy()
                 del self.screen_window
             except:
                 pass
+                
+        if hasattr(self, 'grid_window'):
+            try:
+                self.grid_window.destroy()
+                del self.grid_window
+            except:
+                pass
+                
         self.stop_button.config(state=tk.DISABLED)
         print("Stopped all operations.")
 

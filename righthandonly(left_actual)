@@ -912,7 +912,7 @@ class ScreenFieldControlApp:
                                                 0.5, (255, 0, 255), 1, cv2.LINE_AA)
                                         
                                         # Define threshold for click trigger (negative means hand is closer than grid)
-                                        click_threshold = 300  # mm - adjust based on testing
+                                        click_threshold = 700  # mm - adjust based on testing
                                         
                                         # Trigger click when hand is closer to camera than grid point by threshold amount
                                         should_click = depth_diff <= click_threshold
@@ -952,7 +952,7 @@ class ScreenFieldControlApp:
                                         pyautogui.click(screen_x, screen_y)
                                         
                                         # Strong visual feedback for touch
-                                        cv2.circle(color_image, (hand_x, hand_y), 20, (0, 0, 255), -1)
+                                        cv2.circle(color_image, (hand_x, hand_y), 15, (0, 0, 255), -1)
                                     
                                     # Update touch state - for drawing continuation
                                     self.is_touching = True
